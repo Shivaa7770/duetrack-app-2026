@@ -5,7 +5,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
-from database import init_db
+from database import init_db, get_connection
+from seed import seed
 from routes import (
     auth,
     clients,
@@ -16,10 +17,19 @@ from routes import (
     reports,
 )
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Render's free plan wipes the SQLite file on restart, so if there are no
+    # users yet, create the demo dealer/employees automatically.
+    conn = get_connection()
+    user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    if user_count == 0:
+        seed()
     yield
+
 
 app = FastAPI(
     title="DueTrack API",
@@ -31,6 +41,7 @@ app = FastAPI(
 client_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
 origins = [
     client_origin,
+    "https://duetrack-app-2026.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
@@ -45,12 +56,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"message": str(exc.detail), "detail": exc.detail},
     )
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -64,9 +77,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"message": first_msg, "errors": errors, "detail": exc.errors()},
     )
 
+
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
+
 
 app.include_router(auth.router)
 app.include_router(clients.router)
